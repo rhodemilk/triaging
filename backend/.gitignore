@@ -1,0 +1,15 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# generated media (uploaded audio/images + TTS output)
+media/
+**/media/audio/*
+**/media/images/*
+!**/media/audio/.gitkeep
+!**/media/images/.gitkeep
