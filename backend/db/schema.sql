@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS TRIAGE_SESSIONS (
     status           VARCHAR       DEFAULT 'IN_PROGRESS',
     transcript_json  VARCHAR,      -- [{"role": "user"|"assistant", "text": "..."}]
     image_analysis_json VARCHAR,   -- {"observations": [...], "possible_concern_level": "...", "notes": "..."}
+    triage_state_json VARCHAR,     -- {"route", "confirm_attempts", "internal_severity",
+                                    --  "red_flags", "lit_drawers", "escalated",
+                                    --  "escalate_reason", "vitals"} - AMI turn state
     triage_level     VARCHAR,
     summary          VARCHAR,
     created_at       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),

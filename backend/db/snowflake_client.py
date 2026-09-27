@@ -92,12 +92,20 @@ def init_schema() -> None:
                 status              VARCHAR       DEFAULT 'IN_PROGRESS',
                 transcript_json     VARCHAR,
                 image_analysis_json VARCHAR,
+                triage_state_json   VARCHAR,
                 triage_level        VARCHAR,
                 summary             VARCHAR,
                 created_at          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
                 updated_at          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
             )
             """
+        )
+        # Older sessions tables created before triage_state_json existed
+        # won't have the column - add it if missing so this stays a
+        # painless, idempotent upgrade instead of requiring a manual DROP.
+        cur.execute(
+            f"ALTER TABLE {config.SESSIONS_TABLE} "
+            "ADD COLUMN IF NOT EXISTS triage_state_json VARCHAR"
         )
     finally:
         cur.close()
@@ -233,6 +241,21 @@ def update_patient(
 # ---------------------------------------------------------------------------
 # Triage sessions (step 7 / 8 / 9 / 10 / 11)
 # ---------------------------------------------------------------------------
+# Shape used for a brand new session's triage_state, and the safe fallback
+# whenever an older row has no triage_state_json yet. Mirrors the JSON
+# schema Gemini is asked to return in GEMINI_AMI_SYSTEM_PROMPT.
+DEFAULT_TRIAGE_STATE = {
+    "route": None,
+    "confirm_attempts": 0,
+    "internal_severity": None,
+    "red_flags": [],
+    "lit_drawers": [],
+    "escalated": False,
+    "escalate_reason": None,
+    "vitals": None,
+}
+
+
 def _row_to_session(row) -> dict:
     return {
         "session_id": row[0],
@@ -240,16 +263,17 @@ def _row_to_session(row) -> dict:
         "status": row[2],
         "transcript": json.loads(row[3]) if row[3] else [],
         "image_analysis": json.loads(row[4]) if row[4] else None,
-        "triage_level": row[5],
-        "summary": row[6],
-        "created_at": str(row[7]) if row[7] else None,
-        "updated_at": str(row[8]) if row[8] else None,
+        "triage_state": {**DEFAULT_TRIAGE_STATE, **json.loads(row[5])} if row[5] else dict(DEFAULT_TRIAGE_STATE),
+        "triage_level": row[6],
+        "summary": row[7],
+        "created_at": str(row[8]) if row[8] else None,
+        "updated_at": str(row[9]) if row[9] else None,
     }
 
 
 SESSION_COLUMNS = (
     "session_id, patient_id, status, transcript_json, image_analysis_json, "
-    "triage_level, summary, created_at, updated_at"
+    "triage_state_json, triage_level, summary, created_at, updated_at"
 )
 
 
@@ -261,10 +285,16 @@ def create_session(patient_id: str) -> dict:
         cur.execute(
             f"""
             INSERT INTO {config.SESSIONS_TABLE}
-                (session_id, patient_id, status, transcript_json)
-            VALUES (%s, %s, %s, %s)
+                (session_id, patient_id, status, transcript_json, triage_state_json)
+            VALUES (%s, %s, %s, %s, %s)
             """,
-            (session_id, patient_id, "IN_PROGRESS", json.dumps([])),
+            (
+                session_id,
+                patient_id,
+                "IN_PROGRESS",
+                json.dumps([]),
+                json.dumps(DEFAULT_TRIAGE_STATE),
+            ),
         )
     finally:
         cur.close()
@@ -327,6 +357,54 @@ def save_image_analysis(session_id: str, analysis: dict) -> dict:
     finally:
         cur.close()
     return get_session(session_id)
+
+
+def update_triage_state(session_id: str, patch: dict) -> dict:
+    """Merge `patch` into the session's stored triage_state and persist it.
+
+    This is a shallow merge (patch keys overwrite existing ones) rather
+    than a full replace, so a caller can update just e.g. {"route": "external"}
+    without having to re-send the whole state blob every time.
+    """
+    session = get_session(session_id)
+    if session is None:
+        raise ValueError(f"No session found with id {session_id}")
+
+    state = {**session["triage_state"], **patch}
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"UPDATE {config.SESSIONS_TABLE} SET triage_state_json = %s, "
+            "updated_at = CURRENT_TIMESTAMP() WHERE session_id = %s",
+            (json.dumps(state), session_id),
+        )
+    finally:
+        cur.close()
+    return get_session(session_id)
+
+
+def escalate_emt(session_id: str, reason: str = "") -> dict:
+    """Flag a session as escalated to human medical staff and bump the
+    linked patient's status so it surfaces on any patient-facing dashboard.
+    Stubbed for now - no real hardware/pager integration yet, just state.
+    """
+    session = update_triage_state(
+        session_id, {"escalated": True, "escalate_reason": reason}
+    )
+    update_patient(session["patient_id"], current_status="EMT_ESCALATION")
+    print(f"[EMT SIGNAL] session={session_id} reason={reason!r}")
+    return get_session(session_id)
+
+
+def light_drawers(session_id: str, drawers: list) -> dict:
+    """Record which supply drawers should be lit up for this session.
+    Stubbed for now - no real cabinet hardware wired in yet, just state
+    the hardware layer can poll/read once it exists.
+    """
+    print(f"[LIGHT DRAWERS] session={session_id} drawers={drawers}")
+    return update_triage_state(session_id, {"lit_drawers": drawers})
 
 
 def complete_session(session_id: str, summary: str, triage_level: str) -> dict:
