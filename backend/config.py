@@ -68,6 +68,12 @@ FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
 FLASK_PORT = _get_int("FLASK_PORT", 5001)
 FLASK_DEBUG = _get_bool("FLASK_DEBUG", True)
 
+# Optional shared secret gating /api/rover/* routes (see routes/rover.py's
+# _authorized()). Empty/unset -> auth disabled, fine for a hackathon LAN
+# demo. Set ROVER_API_KEY in backend/.env and send it back as the
+# "X-Rover-Key" header from the Arduino/ESP32 to require it.
+ROVER_API_KEY = os.getenv("ROVER_API_KEY", "")
+
 # Where uploaded/generated media files are written so they can be served
 # back to the caller (rover, browser, curl, whatever hits the API).
 # NOTE: relative paths are resolved against the CURRENT WORKING DIRECTORY
