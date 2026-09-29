@@ -22,8 +22,20 @@ const char* WIFI_PASSWORD = "12345678";
 const char* SERVER_IP = "172.20.10.6";
 const int SERVER_PORT = 5001;
 
-const char* SESSION_ENDPOINT =
-  "http://172.20.10.6:5001/api/triage/session";
+// Single source of truth for every backend URL below. Change SERVER_IP
+// above (e.g. when the "Tiffany" Personal Hotspot hands this Mac a new
+// DHCP lease) and EVERY endpoint (session/voice/image/audio-download)
+// picks it up automatically. Previously "http://172.20.10.6:5001" was
+// duplicated as a literal string in 3 separate places - missing just one
+// on a re-flash meant some endpoints silently kept hitting the old/dead
+// IP while others worked, which looked like random endpoint failures.
+String serverBaseURL() {
+  return "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT);
+}
+
+String sessionEndpointURL() {
+  return serverBaseURL() + "/api/triage/session";
+}
 
 // ======================================================
 // RFID
@@ -763,8 +775,13 @@ bool createPatientSession(
     30000
   );
 
+  // Flask's dev server keeps HTTP/1.1 connections open. ESP32 HTTPClient
+  // often reports the status (201) and then returns an empty body, so
+  // session_id never parses and the voice/image/audio calls never run.
+  http.useHTTP10(true);
+
   if (!http.begin(
-        SESSION_ENDPOINT
+        sessionEndpointURL()
       )) {
 
     Serial.println(
@@ -860,7 +877,7 @@ bool createPatientSession(
     true;
 
   currentVoiceEndpoint =
-    "http://172.20.10.6:5001"
+    serverBaseURL() +
     "/api/triage/session/" +
     currentSessionID +
     "/voice";
@@ -1970,7 +1987,7 @@ bool downloadReplyAudio(
   }
 
   String fullURL =
-    "http://172.20.10.6:5001" +
+    serverBaseURL() +
     audioPath;
 
   Serial.println();
@@ -1991,6 +2008,8 @@ bool downloadReplyAudio(
   http.setTimeout(
     60000
   );
+
+  http.useHTTP10(true);
 
   if (
     !http.begin(
